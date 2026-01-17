@@ -1671,6 +1671,16 @@ static int tui_parse_escape_sequence(tui_context* ctx, tui_event* event) {
         return 1;
     }
     
+    /* Ctrl+Space sends NUL (byte 0) */
+    if (b0 == 0) {
+        event->type = TUI_EVENT_KEY;
+        event->key = TUI_KEY_SPACE;
+        event->ch = ' ';
+        event->ctrl = true;
+        tui_input_consume(ctx, 1);
+        return 1;
+    }
+    
     /* Ctrl+letter (ASCII 1-26 except special chars already handled) */
     if (b0 >= 1 && b0 <= 26 && b0 != '\t' && b0 != '\r' && b0 != '\n') {
         event->type = TUI_EVENT_KEY;

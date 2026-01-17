@@ -3117,6 +3117,16 @@ static bool tui_widget_handle_textbox_input(tui_widget* w, tui_widget_event* e) 
             }
             return true;
             
+        case TUI_KEY_SPACE:
+            /* Space character for text input */
+            if (*len < cap - 1) {
+                memmove(buf + *cursor + 1, buf + *cursor, (size_t)(*len - *cursor + 1));
+                buf[*cursor] = ' ';
+                (*cursor)++;
+                (*len)++;
+            }
+            return true;
+            
         default:
             break;
     }

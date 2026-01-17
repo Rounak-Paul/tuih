@@ -78,8 +78,11 @@ static void on_tab_change(tui_widget* widget, tui_widget_event* event, void* use
 
 static void on_button_click(tui_widget* widget, tui_widget_event* event, void* userdata) {
     (void)userdata;
-    if (event->base.type == TUI_EVENT_KEY && 
-        (event->base.key == TUI_KEY_ENTER || event->base.key == TUI_KEY_SPACE)) {
+    bool activated = (event->base.type == TUI_EVENT_KEY && 
+        (event->base.key == TUI_KEY_ENTER || event->base.key == TUI_KEY_SPACE)) ||
+        (event->base.type == TUI_EVENT_MOUSE && event->base.mouse_button == TUI_MOUSE_LEFT);
+    
+    if (activated) {
         snprintf(g_status_text, sizeof(g_status_text), "Button clicked: %s", 
                  widget->state.button.text);
     }
@@ -87,8 +90,11 @@ static void on_button_click(tui_widget* widget, tui_widget_event* event, void* u
 
 static void on_increment(tui_widget* widget, tui_widget_event* event, void* userdata) {
     (void)widget; (void)userdata;
-    if (event->base.type == TUI_EVENT_KEY && 
-        (event->base.key == TUI_KEY_ENTER || event->base.key == TUI_KEY_SPACE)) {
+    bool activated = (event->base.type == TUI_EVENT_KEY && 
+        (event->base.key == TUI_KEY_ENTER || event->base.key == TUI_KEY_SPACE)) ||
+        (event->base.type == TUI_EVENT_MOUSE && event->base.mouse_button == TUI_MOUSE_LEFT);
+    
+    if (activated) {
         g_counter++;
         snprintf(g_status_text, sizeof(g_status_text), "Counter: %d", g_counter);
     }
@@ -96,8 +102,11 @@ static void on_increment(tui_widget* widget, tui_widget_event* event, void* user
 
 static void on_decrement(tui_widget* widget, tui_widget_event* event, void* userdata) {
     (void)widget; (void)userdata;
-    if (event->base.type == TUI_EVENT_KEY && 
-        (event->base.key == TUI_KEY_ENTER || event->base.key == TUI_KEY_SPACE)) {
+    bool activated = (event->base.type == TUI_EVENT_KEY && 
+        (event->base.key == TUI_KEY_ENTER || event->base.key == TUI_KEY_SPACE)) ||
+        (event->base.type == TUI_EVENT_MOUSE && event->base.mouse_button == TUI_MOUSE_LEFT);
+    
+    if (activated) {
         g_counter--;
         snprintf(g_status_text, sizeof(g_status_text), "Counter: %d", g_counter);
     }
@@ -105,8 +114,11 @@ static void on_decrement(tui_widget* widget, tui_widget_event* event, void* user
 
 static void on_reset(tui_widget* widget, tui_widget_event* event, void* userdata) {
     (void)widget; (void)userdata;
-    if (event->base.type == TUI_EVENT_KEY && 
-        (event->base.key == TUI_KEY_ENTER || event->base.key == TUI_KEY_SPACE)) {
+    bool activated = (event->base.type == TUI_EVENT_KEY && 
+        (event->base.key == TUI_KEY_ENTER || event->base.key == TUI_KEY_SPACE)) ||
+        (event->base.type == TUI_EVENT_MOUSE && event->base.mouse_button == TUI_MOUSE_LEFT);
+    
+    if (activated) {
         g_counter = 0;
         g_progress_value = 0.0f;
         for (int i = 0; i < 4; i++) g_slider_values[i] = 0.5f;
@@ -116,9 +128,12 @@ static void on_reset(tui_widget* widget, tui_widget_event* event, void* userdata
 
 static void on_checkbox_change(tui_widget* widget, tui_widget_event* event, void* userdata) {
     int idx = (int)(intptr_t)userdata;
-    if (event->base.type == TUI_EVENT_KEY && 
-        (event->base.key == TUI_KEY_ENTER || event->base.key == TUI_KEY_SPACE)) {
-        snprintf(g_status_text, sizeof(g_status_text), "Checkbox %d: %s → %s", 
+    bool activated = (event->base.type == TUI_EVENT_KEY && 
+        (event->base.key == TUI_KEY_ENTER || event->base.key == TUI_KEY_SPACE)) ||
+        (event->base.type == TUI_EVENT_MOUSE && event->base.mouse_button == TUI_MOUSE_LEFT);
+    
+    if (activated) {
+        snprintf(g_status_text, sizeof(g_status_text), "Checkbox %d: %s -> %s", 
                  idx + 1, 
                  widget->state.checkbox.checked ? "ON" : "OFF",
                  widget->state.checkbox.checked ? "OFF" : "ON");
@@ -170,7 +185,10 @@ static tui_widget* create_button(tui_widget* parent, int x, int y, int width, co
     tui_widget_set_bounds(w, x, y, width, 1);
     w->state.button.text = text;
     w->tab_index = tab_idx;
-    if (handler) tui_widget_on(w, TUI_EVENT_KEY, handler, data);
+    if (handler) {
+        tui_widget_on(w, TUI_EVENT_KEY, handler, data);
+        tui_widget_on(w, TUI_EVENT_MOUSE, handler, data);
+    }
     tui_widget_add_child(parent, w);
     return w;
 }
@@ -182,7 +200,10 @@ static tui_widget* create_checkbox(tui_widget* parent, int x, int y, const char*
     w->state.checkbox.text = text;
     w->state.checkbox.checked = value ? *value : false;
     w->tab_index = tab_idx;
-    if (handler) tui_widget_on(w, TUI_EVENT_KEY, handler, data);
+    if (handler) {
+        tui_widget_on(w, TUI_EVENT_KEY, handler, data);
+        tui_widget_on(w, TUI_EVENT_MOUSE, handler, data);
+    }
     tui_widget_add_child(parent, w);
     return w;
 }

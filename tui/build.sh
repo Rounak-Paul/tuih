@@ -55,21 +55,15 @@ build_example() {
     echo "OK"
 }
 
-echo "Building examples..."
+echo "Building demo..."
 echo "-----------------------------------"
 
-build_example "examples/hello.c"
-build_example "examples/buttons.c"
-build_example "examples/input.c"
-build_example "examples/widgets_demo.c"
+build_example "examples/demo.c"
 
 echo "-----------------------------------"
 echo ""
-echo "Build complete! Binaries are in bin/"
+echo "Build complete! Binary is in bin/"
 echo ""
-echo "Run examples:"
-echo "  ./bin/hello         - Label rendering demo"
-echo "  ./bin/buttons       - Interactive buttons demo"
-echo "  ./bin/input         - Keyboard handling demo"
-echo "  ./bin/widgets_demo  - Hierarchical widgets demo"
+echo "Run demo:"
+echo "  ./bin/demo  - Complete TUI library demo"
 echo ""

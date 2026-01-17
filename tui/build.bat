@@ -1,7 +1,7 @@
 @echo off
-REM build.bat - Build script for TUI library examples (Windows)
+REM build.bat - Build script for TUI library (Windows)
 REM
-REM This script compiles all example programs using MSVC or MinGW.
+REM This script compiles the demo program using MSVC or MinGW.
 REM Usage: build.bat
 
 setlocal enabledelayedexpansion
@@ -39,16 +39,8 @@ exit /b 1
 echo Building with MSVC...
 echo -----------------------------------
 
-echo Building hello...
-cl /nologo /std:c11 /W4 /O2 /Fe:bin\hello.exe examples\hello.c /link user32.lib
-if %errorlevel% neq 0 goto :error
-
-echo Building buttons...
-cl /nologo /std:c11 /W4 /O2 /Fe:bin\buttons.exe examples\buttons.c /link user32.lib
-if %errorlevel% neq 0 goto :error
-
-echo Building input...
-cl /nologo /std:c11 /W4 /O2 /Fe:bin\input.exe examples\input.c /link user32.lib
+echo Building demo...
+cl /nologo /std:c11 /W4 /O2 /Fe:bin\demo.exe examples\demo.c /link user32.lib
 if %errorlevel% neq 0 goto :error
 
 REM Clean up object files
@@ -60,16 +52,8 @@ goto :done
 echo Building with MinGW...
 echo -----------------------------------
 
-echo Building hello...
-gcc -std=c11 -Wall -Wextra -O2 -o bin\hello.exe examples\hello.c
-if %errorlevel% neq 0 goto :error
-
-echo Building buttons...
-gcc -std=c11 -Wall -Wextra -O2 -o bin\buttons.exe examples\buttons.c
-if %errorlevel% neq 0 goto :error
-
-echo Building input...
-gcc -std=c11 -Wall -Wextra -O2 -o bin\input.exe examples\input.c
+echo Building demo...
+gcc -std=c11 -Wall -Wextra -O2 -o bin\demo.exe examples\demo.c
 if %errorlevel% neq 0 goto :error
 
 goto :done
@@ -82,12 +66,10 @@ exit /b 1
 :done
 echo -----------------------------------
 echo.
-echo Build complete! Binaries are in bin\
+echo Build complete! Binary is in bin\
 echo.
-echo Run examples:
-echo   bin\hello.exe    - Label rendering demo
-echo   bin\buttons.exe  - Interactive buttons demo
-echo   bin\input.exe    - Keyboard handling demo
+echo Run demo:
+echo   bin\demo.exe  - Complete TUI library demo
 echo.
 
 endlocal

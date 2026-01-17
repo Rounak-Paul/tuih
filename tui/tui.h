@@ -96,6 +96,9 @@ typedef struct {
     int mouse_y;
     int new_width;
     int new_height;
+    bool ctrl;      /* Ctrl modifier held */
+    bool alt;       /* Alt modifier held */
+    bool shift;     /* Shift modifier held */
 } tui_event;
 
 /* Style flags */
@@ -295,7 +298,8 @@ typedef enum {
     TUI_WIDGET_PANEL,       /* Visible panel with optional border */
     TUI_WIDGET_LABEL,       /* Static text */
     TUI_WIDGET_BUTTON,      /* Clickable button */
-    TUI_WIDGET_TEXTBOX,     /* Text input */
+    TUI_WIDGET_TEXTBOX,     /* Single-line text input */
+    TUI_WIDGET_TEXTAREA,    /* Multi-line text editor */
     TUI_WIDGET_CHECKBOX,    /* Toggle checkbox */
     TUI_WIDGET_RADIO,       /* Radio button (exclusive selection) */
     TUI_WIDGET_LIST,        /* Scrollable list */
@@ -305,6 +309,7 @@ typedef enum {
     TUI_WIDGET_DROPDOWN,    /* Dropdown select */
     TUI_WIDGET_TABS,        /* Tab bar */
     TUI_WIDGET_SCROLLBAR,   /* Scrollbar */
+    TUI_WIDGET_SPLITTER,    /* Resizable split pane */
     TUI_WIDGET_CUSTOM       /* User-defined widget */
 } tui_widget_type;
 
@@ -401,6 +406,23 @@ struct tui_widget {
         struct { const char* text; tui_align align; } label;
         struct { const char* text; bool pressed; } button;
         struct { char* buffer; int capacity; int length; int cursor; int scroll; } textbox;
+        struct { 
+            char** lines;           /* Array of line pointers (mutable if editable) */
+            int line_count;         /* Total number of lines */
+            int line_capacity;      /* Allocated capacity for lines array */
+            int cursor_row;         /* Cursor row (0-based) */
+            int cursor_col;         /* Cursor column (0-based) */
+            int scroll_row;         /* First visible row */
+            int scroll_col;         /* Horizontal scroll offset */
+            int sel_start_row;      /* Selection start row (-1 = no selection) */
+            int sel_start_col;      /* Selection start column */
+            int sel_end_row;        /* Selection end row */
+            int sel_end_col;        /* Selection end column */
+            bool line_numbers;      /* Show line numbers gutter */
+            bool word_wrap;         /* Enable word wrapping */
+            bool editable;          /* Allow text editing */
+            int max_line_len;       /* Max chars per line (for editable mode) */
+        } textarea;
         struct { const char* text; bool checked; } checkbox;
         struct { const char* text; int* group_value; int value; } radio;
         struct { const char** items; int count; int selected; int scroll; int visible; } list;
@@ -410,6 +432,12 @@ struct tui_widget {
         struct { const char** items; int count; int selected; int scroll; bool open; } dropdown;
         struct { const char** labels; int count; int selected; } tabs;
         struct { int content_size; int view_size; int scroll; bool vertical; bool dragging; int drag_start; } scrollbar;
+        struct {
+            bool vertical;          /* Vertical or horizontal split */
+            float ratio;            /* Split ratio (0.0 - 1.0) */
+            int min_size;           /* Minimum size for each pane */
+            bool dragging;          /* User is dragging the divider */
+        } splitter;
     } state;
 };
 
@@ -1368,6 +1396,15 @@ static int tui_parse_csi_params(tui_context* ctx, int start, int* params, int ma
     return 0;
 }
 
+/* Decode modifier bits from CSI parameter (modifier = 1 + bits) */
+static void tui_decode_modifiers(int modifier_param, bool* shift, bool* alt, bool* ctrl) {
+    /* Terminal encodes: modifier = 1 + (shift?1:0) + (alt?2:0) + (ctrl?4:0) */
+    int bits = modifier_param - 1;
+    *shift = (bits & 1) != 0;
+    *alt = (bits & 2) != 0;
+    *ctrl = (bits & 4) != 0;
+}
+
 static int tui_parse_escape_sequence(tui_context* ctx, tui_event* event) {
     int available = tui_input_available(ctx);
     
@@ -1380,6 +1417,9 @@ static int tui_parse_escape_sequence(tui_context* ctx, tui_event* event) {
     event->mouse_button = TUI_MOUSE_NONE;
     event->mouse_x = 0;
     event->mouse_y = 0;
+    event->ctrl = false;
+    event->alt = false;
+    event->shift = false;
     
     uint8_t b0 = tui_input_peek(ctx, 0);
     
@@ -1517,6 +1557,28 @@ static int tui_parse_escape_sequence(tui_context* ctx, tui_event* event) {
             
             event->type = TUI_EVENT_KEY;
             
+            /* Extract modifier from param[1] if present (format: key;modifier) */
+            if (param_count >= 2 && params[1] > 1) {
+                tui_decode_modifiers(params[1], &event->shift, &event->alt, &event->ctrl);
+            }
+            
+            /* Handle arrow keys with modifiers: ESC[1;5A = Ctrl+Up */
+            if (param_count >= 2 && params[0] == 1) {
+                switch (final_char) {
+                    case 'A': event->key = TUI_KEY_UP; break;
+                    case 'B': event->key = TUI_KEY_DOWN; break;
+                    case 'C': event->key = TUI_KEY_RIGHT; break;
+                    case 'D': event->key = TUI_KEY_LEFT; break;
+                    case 'H': event->key = TUI_KEY_HOME; break;
+                    case 'F': event->key = TUI_KEY_END; break;
+                    default: event->key = TUI_KEY_NONE; break;
+                }
+                if (event->key != TUI_KEY_NONE) {
+                    tui_input_consume(ctx, end_pos + 1);
+                    return 1;
+                }
+            }
+            
             if (final_char == '~' && param_count >= 1) {
                 switch (params[0]) {
                     case 1: event->key = TUI_KEY_HOME; break;
@@ -1605,6 +1667,16 @@ static int tui_parse_escape_sequence(tui_context* ctx, tui_event* event) {
         event->type = TUI_EVENT_KEY;
         event->key = TUI_KEY_SPACE;
         event->ch = ' ';
+        tui_input_consume(ctx, 1);
+        return 1;
+    }
+    
+    /* Ctrl+letter (ASCII 1-26 except special chars already handled) */
+    if (b0 >= 1 && b0 <= 26 && b0 != '\t' && b0 != '\r' && b0 != '\n') {
+        event->type = TUI_EVENT_KEY;
+        event->key = TUI_KEY_CHAR;
+        event->ch = 'a' + (b0 - 1);  /* Convert to lowercase letter */
+        event->ctrl = true;
         tui_input_consume(ctx, 1);
         return 1;
     }
@@ -2624,12 +2696,25 @@ tui_widget* tui_widget_create(tui_widget_type type) {
     w->enabled = true;
     w->focusable = (type == TUI_WIDGET_BUTTON || 
                     type == TUI_WIDGET_TEXTBOX || 
+                    type == TUI_WIDGET_TEXTAREA ||
                     type == TUI_WIDGET_CHECKBOX ||
+                    type == TUI_WIDGET_RADIO ||
+                    type == TUI_WIDGET_SLIDER ||
+                    type == TUI_WIDGET_SPINNER ||
+                    type == TUI_WIDGET_TABS ||
                     type == TUI_WIDGET_LIST);
     w->tab_index = w->focusable ? 0 : -1;
     w->bg_color = TUI_COLOR_DEFAULT;
     w->fg_color = TUI_COLOR_DEFAULT;
     w->border_style = TUI_BORDER_NONE;
+    
+    /* Type-specific initialization */
+    if (type == TUI_WIDGET_TEXTAREA) {
+        w->state.textarea.sel_start_row = -1;  /* No selection */
+    } else if (type == TUI_WIDGET_SPLITTER) {
+        w->state.splitter.ratio = 0.5f;
+        w->state.splitter.min_size = 3;
+    }
     
     return w;
 }
@@ -3478,6 +3563,349 @@ static bool tui_widget_handle_scrollbar_input(tui_widget* w, tui_widget_event* e
     return false;
 }
 
+/* Handle textarea input */
+static bool tui_widget_handle_textarea_input(tui_widget* w, tui_widget_event* e) {
+    if (!w || !e) return false;
+    if (!w->state.textarea.lines || w->state.textarea.line_count == 0) return false;
+    
+    int* row = &w->state.textarea.cursor_row;
+    int* col = &w->state.textarea.cursor_col;
+    int* scroll_row = &w->state.textarea.scroll_row;
+    int line_count = w->state.textarea.line_count;
+    bool editable = w->state.textarea.editable;
+    int max_line_len = w->state.textarea.max_line_len > 0 ? w->state.textarea.max_line_len : 256;
+    
+    /* Calculate visible rows */
+    int visible_rows = w->height - (w->has_border ? 2 : 0);
+    int gutter_width = w->state.textarea.line_numbers ? 5 : 0;
+    int visible_cols = w->width - (w->has_border ? 2 : 0) - gutter_width;
+    (void)visible_cols;
+    
+    /* Handle mouse events */
+    if (e->base.type == TUI_EVENT_MOUSE) {
+        int ax, ay, aw, ah;
+        tui_widget_get_absolute_bounds(w, &ax, &ay, &aw, &ah);
+        
+        if (e->base.mouse_button == TUI_MOUSE_LEFT) {
+            /* Click to position cursor */
+            int click_row = e->base.mouse_y - ay + *scroll_row;
+            int click_col = e->base.mouse_x - ax - gutter_width;
+            
+            if (click_row >= 0 && click_row < line_count) {
+                *row = click_row;
+                int line_len = w->state.textarea.lines[*row] ? 
+                               (int)strlen(w->state.textarea.lines[*row]) : 0;
+                *col = (click_col >= 0) ? click_col : 0;
+                if (*col > line_len) *col = line_len;
+            }
+            return true;
+        } else if (e->base.mouse_button == TUI_MOUSE_WHEEL_UP) {
+            *scroll_row -= 3;
+            if (*scroll_row < 0) *scroll_row = 0;
+            return true;
+        } else if (e->base.mouse_button == TUI_MOUSE_WHEEL_DOWN) {
+            *scroll_row += 3;
+            int max_scroll = line_count - visible_rows;
+            if (max_scroll < 0) max_scroll = 0;
+            if (*scroll_row > max_scroll) *scroll_row = max_scroll;
+            return true;
+        }
+        return false;
+    }
+    
+    /* Only handle key events from here */
+    if (e->base.type != TUI_EVENT_KEY) return false;
+    
+    /* Get current line */
+    char* current_line = w->state.textarea.lines[*row];
+    int current_line_len = current_line ? (int)strlen(current_line) : 0;
+    
+    /* Navigation keys */
+    switch (e->base.key) {
+        case TUI_KEY_UP:
+            if (*row > 0) {
+                (*row)--;
+                int new_line_len = w->state.textarea.lines[*row] ? 
+                                   (int)strlen(w->state.textarea.lines[*row]) : 0;
+                if (*col > new_line_len) *col = new_line_len;
+                if (*row < *scroll_row) *scroll_row = *row;
+            }
+            return true;
+            
+        case TUI_KEY_DOWN:
+            if (*row < line_count - 1) {
+                (*row)++;
+                int new_line_len = w->state.textarea.lines[*row] ? 
+                                   (int)strlen(w->state.textarea.lines[*row]) : 0;
+                if (*col > new_line_len) *col = new_line_len;
+                if (*row >= *scroll_row + visible_rows) *scroll_row = *row - visible_rows + 1;
+            }
+            return true;
+            
+        case TUI_KEY_LEFT:
+            if (*col > 0) {
+                (*col)--;
+            } else if (*row > 0) {
+                (*row)--;
+                *col = w->state.textarea.lines[*row] ? 
+                       (int)strlen(w->state.textarea.lines[*row]) : 0;
+                if (*row < *scroll_row) *scroll_row = *row;
+            }
+            return true;
+            
+        case TUI_KEY_RIGHT:
+            if (*col < current_line_len) {
+                (*col)++;
+            } else if (*row < line_count - 1) {
+                (*row)++;
+                *col = 0;
+                if (*row >= *scroll_row + visible_rows) *scroll_row = *row - visible_rows + 1;
+            }
+            return true;
+            
+        case TUI_KEY_HOME:
+            if (e->base.ctrl) {
+                *row = 0;
+                *col = 0;
+                *scroll_row = 0;
+            } else {
+                *col = 0;
+            }
+            return true;
+            
+        case TUI_KEY_END:
+            if (e->base.ctrl) {
+                *row = w->state.textarea.line_count - 1;
+                *col = w->state.textarea.lines[*row] ? 
+                       (int)strlen(w->state.textarea.lines[*row]) : 0;
+                if (*row >= *scroll_row + visible_rows) *scroll_row = *row - visible_rows + 1;
+            } else {
+                *col = current_line_len;
+            }
+            return true;
+            
+        case TUI_KEY_PAGEUP:
+            *row -= visible_rows;
+            if (*row < 0) *row = 0;
+            *scroll_row -= visible_rows;
+            if (*scroll_row < 0) *scroll_row = 0;
+            {
+                int new_line_len = w->state.textarea.lines[*row] ? 
+                                   (int)strlen(w->state.textarea.lines[*row]) : 0;
+                if (*col > new_line_len) *col = new_line_len;
+            }
+            return true;
+            
+        case TUI_KEY_PAGEDOWN:
+            *row += visible_rows;
+            if (*row >= w->state.textarea.line_count) *row = w->state.textarea.line_count - 1;
+            *scroll_row += visible_rows;
+            {
+                int max_scroll = w->state.textarea.line_count - visible_rows;
+                if (max_scroll < 0) max_scroll = 0;
+                if (*scroll_row > max_scroll) *scroll_row = max_scroll;
+                int new_line_len = w->state.textarea.lines[*row] ? 
+                                   (int)strlen(w->state.textarea.lines[*row]) : 0;
+                if (*col > new_line_len) *col = new_line_len;
+            }
+            return true;
+        
+        default:
+            break;
+    }
+    
+    /* Editing keys (only if editable) */
+    if (!editable) return false;
+    
+    switch (e->base.key) {
+        case TUI_KEY_BACKSPACE:
+            if (*col > 0 && current_line) {
+                /* Delete char before cursor */
+                memmove(current_line + *col - 1, current_line + *col, 
+                        strlen(current_line + *col) + 1);
+                (*col)--;
+            } else if (*col == 0 && *row > 0) {
+                /* Join with previous line */
+                char* prev_line = w->state.textarea.lines[*row - 1];
+                int prev_len = prev_line ? (int)strlen(prev_line) : 0;
+                int curr_len = current_line ? (int)strlen(current_line) : 0;
+                
+                if (prev_len + curr_len < max_line_len) {
+                    /* Append current line to previous */
+                    if (current_line && prev_line) {
+                        strcat(prev_line, current_line);
+                    }
+                    /* Free current line and shift remaining lines up */
+                    free(current_line);
+                    for (int i = *row; i < w->state.textarea.line_count - 1; i++) {
+                        w->state.textarea.lines[i] = w->state.textarea.lines[i + 1];
+                    }
+                    w->state.textarea.line_count--;
+                    (*row)--;
+                    *col = prev_len;
+                    if (*row < *scroll_row) *scroll_row = *row;
+                }
+            }
+            return true;
+            
+        case TUI_KEY_DELETE:
+            if (current_line && *col < current_line_len) {
+                /* Delete char at cursor */
+                memmove(current_line + *col, current_line + *col + 1, 
+                        strlen(current_line + *col + 1) + 1);
+            } else if (*row < w->state.textarea.line_count - 1) {
+                /* Join with next line */
+                char* next_line = w->state.textarea.lines[*row + 1];
+                int curr_len = current_line ? (int)strlen(current_line) : 0;
+                int next_len = next_line ? (int)strlen(next_line) : 0;
+                
+                if (curr_len + next_len < max_line_len && current_line) {
+                    strcat(current_line, next_line ? next_line : "");
+                    free(next_line);
+                    for (int i = *row + 1; i < w->state.textarea.line_count - 1; i++) {
+                        w->state.textarea.lines[i] = w->state.textarea.lines[i + 1];
+                    }
+                    w->state.textarea.line_count--;
+                }
+            }
+            return true;
+            
+        case TUI_KEY_ENTER:
+            /* Split line at cursor */
+            if (w->state.textarea.line_count < w->state.textarea.line_capacity) {
+                /* Make room for new line */
+                for (int i = w->state.textarea.line_count; i > *row + 1; i--) {
+                    w->state.textarea.lines[i] = w->state.textarea.lines[i - 1];
+                }
+                
+                /* Create new line with content after cursor */
+                const char* after_cursor = current_line ? current_line + *col : "";
+                char* new_line = (char*)malloc(max_line_len);
+                if (new_line) {
+                    strncpy(new_line, after_cursor, max_line_len - 1);
+                    new_line[max_line_len - 1] = '\0';
+                    w->state.textarea.lines[*row + 1] = new_line;
+                    
+                    /* Truncate current line at cursor */
+                    if (current_line) current_line[*col] = '\0';
+                    
+                    w->state.textarea.line_count++;
+                    (*row)++;
+                    *col = 0;
+                    if (*row >= *scroll_row + visible_rows) *scroll_row = *row - visible_rows + 1;
+                }
+            }
+            return true;
+            
+        case TUI_KEY_TAB:
+            /* Insert spaces for tab */
+            if (current_line && current_line_len + 4 < max_line_len) {
+                memmove(current_line + *col + 4, current_line + *col, 
+                        strlen(current_line + *col) + 1);
+                memset(current_line + *col, ' ', 4);
+                *col += 4;
+            }
+            return true;
+            
+        case TUI_KEY_SPACE:
+            /* Insert space */
+            if (current_line && current_line_len < max_line_len - 1) {
+                memmove(current_line + *col + 1, current_line + *col, 
+                        strlen(current_line + *col) + 1);
+                current_line[*col] = ' ';
+                (*col)++;
+            }
+            return true;
+            
+        case TUI_KEY_CHAR:
+            /* Insert character */
+            if (current_line && current_line_len < max_line_len - 1 && e->base.ch >= 32) {
+                memmove(current_line + *col + 1, current_line + *col, 
+                        strlen(current_line + *col) + 1);
+                current_line[*col] = (char)e->base.ch;
+                (*col)++;
+            }
+            return true;
+            
+        default:
+            break;
+    }
+    
+    return false;
+}
+
+/* Handle splitter input */
+static bool tui_widget_handle_splitter_input(tui_widget* w, tui_widget_event* e) {
+    if (!w || !e) return false;
+    
+    if (e->base.type == TUI_EVENT_MOUSE) {
+        int ax, ay, aw, ah;
+        tui_widget_get_absolute_bounds(w, &ax, &ay, &aw, &ah);
+        
+        if (e->base.mouse_button == TUI_MOUSE_LEFT) {
+            w->state.splitter.dragging = true;
+            
+            /* Calculate new ratio */
+            if (w->state.splitter.vertical) {
+                float new_ratio = (float)(e->base.mouse_y - ay) / (float)ah;
+                if (new_ratio < 0.1f) new_ratio = 0.1f;
+                if (new_ratio > 0.9f) new_ratio = 0.9f;
+                w->state.splitter.ratio = new_ratio;
+            } else {
+                float new_ratio = (float)(e->base.mouse_x - ax) / (float)aw;
+                if (new_ratio < 0.1f) new_ratio = 0.1f;
+                if (new_ratio > 0.9f) new_ratio = 0.9f;
+                w->state.splitter.ratio = new_ratio;
+            }
+            return true;
+        } else if (e->base.mouse_button == TUI_MOUSE_MOVE && w->state.splitter.dragging) {
+            if (w->state.splitter.vertical) {
+                float new_ratio = (float)(e->base.mouse_y - ay) / (float)ah;
+                if (new_ratio < 0.1f) new_ratio = 0.1f;
+                if (new_ratio > 0.9f) new_ratio = 0.9f;
+                w->state.splitter.ratio = new_ratio;
+            } else {
+                float new_ratio = (float)(e->base.mouse_x - ax) / (float)aw;
+                if (new_ratio < 0.1f) new_ratio = 0.1f;
+                if (new_ratio > 0.9f) new_ratio = 0.9f;
+                w->state.splitter.ratio = new_ratio;
+            }
+            return true;
+        } else if (e->base.mouse_button == TUI_MOUSE_RELEASE) {
+            w->state.splitter.dragging = false;
+            return true;
+        }
+    } else if (e->base.type == TUI_EVENT_KEY) {
+        /* Allow keyboard adjustment with Ctrl+arrow */
+        if (e->base.ctrl) {
+            float step = 0.05f;
+            if (w->state.splitter.vertical) {
+                if (e->base.key == TUI_KEY_UP) {
+                    w->state.splitter.ratio -= step;
+                    if (w->state.splitter.ratio < 0.1f) w->state.splitter.ratio = 0.1f;
+                    return true;
+                } else if (e->base.key == TUI_KEY_DOWN) {
+                    w->state.splitter.ratio += step;
+                    if (w->state.splitter.ratio > 0.9f) w->state.splitter.ratio = 0.9f;
+                    return true;
+                }
+            } else {
+                if (e->base.key == TUI_KEY_LEFT) {
+                    w->state.splitter.ratio -= step;
+                    if (w->state.splitter.ratio < 0.1f) w->state.splitter.ratio = 0.1f;
+                    return true;
+                } else if (e->base.key == TUI_KEY_RIGHT) {
+                    w->state.splitter.ratio += step;
+                    if (w->state.splitter.ratio > 0.9f) w->state.splitter.ratio = 0.9f;
+                    return true;
+                }
+            }
+        }
+    }
+    
+    return false;
+}
+
 /* Handle button input */
 static bool tui_widget_handle_button_input(tui_widget* w, tui_widget_event* e) {
     if (!w || !e) return false;
@@ -3526,6 +3954,10 @@ static bool tui_widget_handle_default_input(tui_widget* w, tui_widget_event* e) 
             return tui_widget_handle_tabs_input(w, e);
         case TUI_WIDGET_SCROLLBAR:
             return tui_widget_handle_scrollbar_input(w, e);
+        case TUI_WIDGET_TEXTAREA:
+            return tui_widget_handle_textarea_input(w, e);
+        case TUI_WIDGET_SPLITTER:
+            return tui_widget_handle_splitter_input(w, e);
         default:
             break;
     }
@@ -3961,6 +4393,127 @@ static void tui_widget_draw_recursive(tui_widget* w, tui_context* ctx) {
                     } else {
                         tui_set_cell(ctx, x + thumb_pos + i, y, 0x2588);
                     }
+                }
+            }
+            break;
+        }
+        
+        case TUI_WIDGET_TEXTAREA: {
+            bool focused = w->focused;
+            char** lines = w->state.textarea.lines;
+            int line_count = w->state.textarea.line_count;
+            int scroll_row = w->state.textarea.scroll_row;
+            int scroll_col = w->state.textarea.scroll_col;
+            int cursor_row = w->state.textarea.cursor_row;
+            int cursor_col = w->state.textarea.cursor_col;
+            bool line_numbers = w->state.textarea.line_numbers;
+            
+            int gutter_width = line_numbers ? 5 : 0;
+            int text_x = x + gutter_width;
+            int text_width = width - gutter_width;
+            
+            for (int i = 0; i < height; i++) {
+                int line_idx = scroll_row + i;
+                
+                /* Draw line number gutter */
+                if (line_numbers) {
+                    if (line_idx < line_count) {
+                        tui_set_fg(ctx, TUI_RGB(100, 100, 100));
+                        tui_set_bg(ctx, TUI_RGB(30, 30, 30));
+                        char num_buf[8];
+                        snprintf(num_buf, sizeof(num_buf), "%4d", line_idx + 1);
+                        tui_label(ctx, x, y + i, num_buf);
+                        tui_set_cell(ctx, x + 4, y + i, 0x2502);
+                    } else {
+                        tui_set_fg(ctx, TUI_RGB(60, 60, 60));
+                        tui_set_bg(ctx, TUI_RGB(30, 30, 30));
+                        tui_fill(ctx, x, y + i, gutter_width, 1, ' ');
+                    }
+                }
+                
+                /* Draw text content */
+                tui_set_fg(ctx, fg);
+                tui_set_bg(ctx, bg);
+                tui_fill(ctx, text_x, y + i, text_width, 1, ' ');
+                
+                if (line_idx < line_count && lines && lines[line_idx]) {
+                    const char* line = lines[line_idx];
+                    int line_len = (int)strlen(line);
+                    
+                    for (int j = 0; j < text_width && scroll_col + j < line_len; j++) {
+                        tui_set_cell(ctx, text_x + j, y + i, (uint32_t)(uint8_t)line[scroll_col + j]);
+                    }
+                }
+                
+                /* Draw cursor */
+                if (focused && line_idx == cursor_row) {
+                    int cursor_screen_x = text_x + cursor_col - scroll_col;
+                    if (cursor_screen_x >= text_x && cursor_screen_x < text_x + text_width) {
+                        tui_set_bg(ctx, TUI_COLOR_WHITE);
+                        tui_set_fg(ctx, TUI_COLOR_BLACK);
+                        const char* line = (lines && lines[line_idx]) ? lines[line_idx] : "";
+                        int line_len = (int)strlen(line);
+                        uint32_t ch = (cursor_col < line_len) ? (uint32_t)(uint8_t)line[cursor_col] : ' ';
+                        tui_set_cell(ctx, cursor_screen_x, y + i, ch);
+                    }
+                }
+            }
+            break;
+        }
+        
+        case TUI_WIDGET_SPLITTER: {
+            bool vertical = w->state.splitter.vertical;
+            float ratio = w->state.splitter.ratio;
+            int min_size = w->state.splitter.min_size;
+            
+            /* Calculate split position */
+            int split_pos;
+            if (vertical) {
+                split_pos = (int)(ratio * (float)height);
+                if (split_pos < min_size) split_pos = min_size;
+                if (split_pos > height - min_size) split_pos = height - min_size;
+            } else {
+                split_pos = (int)(ratio * (float)width);
+                if (split_pos < min_size) split_pos = min_size;
+                if (split_pos > width - min_size) split_pos = width - min_size;
+            }
+            
+            /* Draw divider line */
+            tui_set_fg(ctx, w->state.splitter.dragging ? TUI_COLOR_CYAN : TUI_RGB(100, 100, 100));
+            tui_set_bg(ctx, bg);
+            
+            if (vertical) {
+                for (int i = 0; i < width; i++) {
+                    tui_set_cell(ctx, x + i, y + split_pos, 0x2500); /* Horizontal line */
+                }
+            } else {
+                for (int i = 0; i < height; i++) {
+                    tui_set_cell(ctx, x + split_pos, y + i, 0x2502); /* Vertical line */
+                }
+            }
+            
+            /* Update child positions based on split */
+            if (w->child_count >= 2) {
+                if (vertical) {
+                    w->children[0]->x = 0;
+                    w->children[0]->y = 0;
+                    w->children[0]->width = width;
+                    w->children[0]->height = split_pos;
+                    
+                    w->children[1]->x = 0;
+                    w->children[1]->y = split_pos + 1;
+                    w->children[1]->width = width;
+                    w->children[1]->height = height - split_pos - 1;
+                } else {
+                    w->children[0]->x = 0;
+                    w->children[0]->y = 0;
+                    w->children[0]->width = split_pos;
+                    w->children[0]->height = height;
+                    
+                    w->children[1]->x = split_pos + 1;
+                    w->children[1]->y = 0;
+                    w->children[1]->width = width - split_pos - 1;
+                    w->children[1]->height = height;
                 }
             }
             break;

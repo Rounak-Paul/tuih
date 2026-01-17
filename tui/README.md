@@ -63,7 +63,7 @@ int main(void) {
 cd tui
 chmod +x build.sh
 ./build.sh
-./bin/widgets_demo
+./bin/demo
 ```
 
 ### Windows (MSVC)
@@ -71,17 +71,17 @@ chmod +x build.sh
 ```batch
 cd tui
 build.bat
-bin\widgets_demo.exe
+bin\demo.exe
 ```
 
 ### Manual Compilation
 
 ```bash
 # Linux/macOS
-cc -std=c11 -O2 -o widgets_demo examples/widgets_demo.c
+cc -std=c11 -O2 -o demo examples/demo.c
 
 # Windows (MSVC)
-cl /std:c11 /O2 /Fe:widgets_demo.exe examples\widgets_demo.c
+cl /std:c11 /O2 /Fe:demo.exe examples\demo.c
 ```
 
 ## Widget Reference
@@ -168,14 +168,22 @@ tui_wm_destroy(wm);
 #### Widget Types
 
 ```c
+TUI_WIDGET_CONTAINER  // Invisible grouping container
 TUI_WIDGET_PANEL      // Container with optional border
 TUI_WIDGET_LABEL      // Static text
 TUI_WIDGET_BUTTON     // Clickable button
-TUI_WIDGET_TEXTBOX    // Text input field
+TUI_WIDGET_TEXTBOX    // Single-line text input
+TUI_WIDGET_TEXTAREA   // Multi-line text editor with line numbers
 TUI_WIDGET_CHECKBOX   // Boolean toggle
 TUI_WIDGET_RADIO      // Radio button group
 TUI_WIDGET_LIST       // Scrollable list
+TUI_WIDGET_PROGRESS   // Progress bar
+TUI_WIDGET_SLIDER     // Value slider
+TUI_WIDGET_SPINNER    // Numeric spinner
+TUI_WIDGET_DROPDOWN   // Dropdown select
+TUI_WIDGET_TABS       // Tab bar
 TUI_WIDGET_SCROLLBAR  // Scroll indicator
+TUI_WIDGET_SPLITTER   // Resizable split pane
 TUI_WIDGET_CUSTOM     // User-defined widget
 ```
 
